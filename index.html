@@ -25,7 +25,6 @@
   .tile.blank{background:#0b1220;border-style:dashed}
   .prob{font-size:12px;opacity:.95;position:absolute;bottom:4px;right:6px;text-shadow:0 1px 2px rgba(0,0,0,.5)}
   .hi{outline:3px solid var(--hi)}
-  /* quick tool buttons */
   .toolbar{display:flex;gap:8px;flex-wrap:wrap}
   .tool{background:#0b1220;border:1px solid var(--line);color:var(--fg);border-radius:10px;padding:10px 14px;font-weight:800;min-width:48px;text-align:center}
   .tool.active{outline:3px solid #22c55e}
@@ -59,7 +58,7 @@
     </div>
   </div>
 
-  <!-- Quick tool buttons (includes Eyedropper) -->
+  <!-- Tools (includes Eyedropper) -->
   <div class="card">
     <div class="toolbar">
       <button class="tool" id="toolPick">🔎</button>
@@ -73,7 +72,7 @@
       <button class="tool" id="toolBlank">_</button>
     </div>
     <div style="margin-top:6px;color:#9aa4b2;font-size:.9em">
-      Tap a tool (e.g. <b>$</b> or <b>🔎</b>), then tap cells. Eyedropper (🔎) picks the tapped cell’s type as the active tool.
+      Tap a tool (e.g. <b>$</b> or <b>🔎</b>), then tap cells. Eyedropper (🔎) picks the tapped cell’s type as the active tool (does not paint on the pick tap).
     </div>
   </div>
 
@@ -125,6 +124,9 @@ const CARD={UNKNOWN:"UNKNOWN",MONEY:"MONEY",JERRY:"JERRY",HINT:"HINT",REACTIVATO
 const SYM={UNKNOWN:".",MONEY:"$",JERRY:"X",HINT:"H",REACTIVATOR:"R",EYE:"E",MULTIPLIER:"M",BLANK:"_"};
 let R=3,C=8,TOTAL=4; let G=[]; let hints=[]; let PROB=null;
 
+/* ACTIVE TOOL: keep separate from the <select> so PICK never breaks it */
+let activeTool = CARD.UNKNOWN; // one of CARD.* or "PICK"
+
 /* ===== Utilities ===== */
 function makeG(){ G=[...Array(R)].map(()=>[...Array(C)].map(()=>CARD.UNKNOWN)); }
 function css(t){ return {UNKNOWN:"unknown",JERRY:"jerry",MONEY:"money",HINT:"hint",REACTIVATOR:"reac",EYE:"eye",MULTIPLIER:"mult",BLANK:"blank"}[t]||"unknown"; }
@@ -138,15 +140,9 @@ function parseCell(s){
 }
 function cycle(t){ const a=[CARD.UNKNOWN,CARD.MONEY,CARD.JERRY,CARD.HINT,CARD.REACTIVATOR,CARD.EYE,CARD.MULTIPLIER,CARD.BLANK]; return a[(a.indexOf(t)+1)%a.length]; }
 function key(r,c){return r+","+c} function unkey(k){return k.split(",").map(Number)}
+function probToColor(p){ const hue=Math.round((1-p)*130); return `hsl(${hue} 85% 40%)`; }
 
 /* ===== Rendering ===== */
-function probToColor(p){
-  // 0 -> green (h=130), 1 -> red (h=0); tweak for visibility
-  const hue = Math.round((1-p)*130); // 130..0
-  const sat = 85; // %
-  const lig = 40; // %
-  return `hsl(${hue} ${sat}% ${lig}%)`;
-}
 function render(){
   const grid=document.getElementById("grid");
   grid.style.gridTemplateColumns=`repeat(${C},54px)`;
@@ -159,15 +155,15 @@ function render(){
     b.title=toCoord(r,c);
     b.addEventListener("click",()=>{
       const mode=document.getElementById("mode").value;
-      const activeType=document.getElementById("placeType").value;
       if(mode==="cycle"){
         G[r][c]=cycle(G[r][c]);
       } else {
-        if(activeType==="PICK"){ // Eyedropper
-          setTool(typeFromCell(G[r][c]));
-          return; // don't paint while picking
+        if(activeTool==="PICK"){ // eyedropper: pick only
+          setTool(G[r][c]); // switch tool to the tapped cell's type
+          return;
         }
-        G[r][c]=activeType;
+        // paint with the active tool
+        G[r][c]=activeTool;
       }
       PROB=null; // invalidate probabilities on edit
       clearHighlights();
@@ -184,11 +180,10 @@ function render(){
       if(G[r][c]===CARD.UNKNOWN){
         const p=PROB[r][c];
         el.textContent=(p*100).toFixed(0)+"%";
-        // apply heat color
         tiles[i].style.backgroundColor = probToColor(p);
       } else {
         el.textContent="";
-        tiles[i].style.backgroundColor = ""; // keep fixed type color
+        tiles[i].style.backgroundColor = "";
       }
     }
   }
@@ -253,7 +248,7 @@ function sampleValid(){
   const rest=cand.filter(([r,c])=>!fixed.has(key(r,c)));
   shuffle(rest);
   const J=new Set(fixed);
-  function quick(){ // light prune
+  function quick(){
     if(hints.some(h=>h.type==="no_adjacent")){
       for(const kk of J){const [r,c]=unkey(kk); for(const [nr,nc] of neighbors8(r,c)) if(J.has(key(nr,nc))) return false;}
     }
@@ -298,13 +293,38 @@ function recommend(prob,k){
   return list.slice(0,Math.max(0,k));
 }
 
-/* ===== Hints UI ===== */
+/* ===== Hints UI (single, correct definition) ===== */
+function renderHintParams(){
+  const t=document.getElementById("hintType").value;
+  const box=document.getElementById("hintParams"); box.innerHTML="";
+  function field(id,label,ph){ box.insertAdjacentHTML("beforeend",`<label>${label}<br><input id="${id}" placeholder="${ph}" style="width:140px"></label>`); }
+  if(t==="row_count"){ field("hp_row","Row (A or 0)","A"); field("hp_count","Count","2"); }
+  else if(t==="col_count"){ field("hp_col","Col (1 or 0)","3"); field("hp_count","Count","1"); }
+  else if(t==="num_columns_with_jerry"){ field("hp_k","K cols","4"); }
+  else if(t==="adjacent_count"){ field("hp_cell","Cell (A1 or 'r c')","B5"); field("hp_count","Count","2"); }
+  else if(t==="adjacent_to_eyes_total"){ field("hp_count","Unique adj to EYE","3"); }
+  else if(t==="corner_count"){ field("hp_count","Corners count","1"); }
+  else if(t==="largest_grouping"){ field("hp_size","Largest group size","2"); }
+  else if(["more_left_than_right","more_right_than_left","more_up_than_down","more_down_than_up"].includes(t)){ field("hp_cell","Cell (A1 or 'r c')","C4"); }
+  /* no params needed for the others */
+}
+function renderHints(){
+  const list=document.getElementById("hintList"); list.innerHTML="";
+  hints.forEach((h,i)=>{
+    const d=document.createElement("div"); d.className="card"; d.style.padding="6px";
+    d.innerHTML=`<div style="display:flex;justify-content:space-between;gap:8px;align-items:center">
+      <div style="font-size:14px">${JSON.stringify(h)}</div>
+      <button class="btn" style="background:#475569">remove</button></div>`;
+    d.querySelector("button").onclick=()=>{ hints.splice(i,1); renderHints(); };
+    list.appendChild(d);
+  });
+}
 function addHintUI(){
   const t=document.getElementById("hintType").value;
   try{
     if(["no_adjacent","exists_row_empty","each_row_at_least_one","all_in_3x3"].includes(t)){ hints.push({type:t}); }
     else if(t==="row_count"){
-      const rowV=document.getElementById("hp_row")?.value.trim();
+      const rowV=document.getElementById("hp_row").value.trim();
       const row = /^[A-Za-z]$/.test(rowV)? rowV.toUpperCase().charCodeAt(0)-65 : parseInt(rowV,10);
       const count=parseInt(document.getElementById("hp_count").value,10);
       hints.push({type:t,row,count});
@@ -331,30 +351,6 @@ function addHintUI(){
     renderHints();
   }catch(e){ alert("Hint error: "+e.message); }
 }
-function renderHintParams(){
-  const t=document.getElementById("hintType").value;
-  const box=document.getElementById("hintParams"); box.innerHTML="";
-  function field(id,label,ph){ box.insertAdjacentHTML("beforeend",`<label>${label}<br><input id="${id}" placeholder="${ph}" style="width:140px"></label>`); }
-  if(t==="row_count"){ field("hp_row","Row (A or 0)","A"); field("hp_count","Count","2"); }
-  else if(t==="col_count"){ field("hp_col","Col (1 or 0)","3"); field("hp_count","Count","1"); }
-  else if(t==="num_columns_with_jerry"){ field("hp_k","K cols","4"); }
-  else if(t==="adjacent_count"){ field("hp_cell","Cell (A1 or 'r c')","B5"); field("hp_count","Count","2"); }
-  else if(t==="adjacent_to_eyes_total"){ field("hp_count","Unique adj to EYE","3"); }
-  else if(t==="corner_count"){ field("hp_count","Corners count","1"); }
-  else if(t==="largest_grouping"){ field("hp_size","Largest group size","2"); }
-  else if(["more_left_than_right","more_right_than_left","more_up_than_down","more_down_than_up"].includes(t)){ field("hp_cell","Cell (A1 or 'r c')","C4"); }
-}
-function renderHints(){
-  const list=document.getElementById("hintList"); list.innerHTML="";
-  hints.forEach((h,i)=>{
-    const d=document.createElement("div"); d.className="card"; d.style.padding="6px";
-    d.innerHTML=`<div style="display:flex;justify-content:space-between;gap:8px;align-items:center">
-      <div style="font-size:14px">${JSON.stringify(h)}</div>
-      <button class="btn" style="background:#475569">remove</button></div>`;
-    d.querySelector("button").onclick=()=>{ hints.splice(i,1); renderHints(); };
-    list.appendChild(d);
-  });
-}
 
 /* ===== Picks ===== */
 function showPicks(kOverride=null){
@@ -372,7 +368,6 @@ function showPicks(kOverride=null){
       tile.classList.add("hi"); tile.scrollIntoView({behavior:"smooth",block:"center",inline:"center"});
     };
     area.appendChild(b);
-    // highlight immediately
     const idx=p.r*C+p.c;
     const tile=[...document.getElementById("grid").children][idx];
     tile.classList.add("hi");
@@ -387,32 +382,33 @@ document.getElementById("run").onclick=()=>{
   PROB=prob;
   document.getElementById("hit").textContent=`Success ${(hit*100).toFixed(1)}%`;
   render();
-  // auto-show and highlight top 3 picks
-  showPicks(3);
+  showPicks(3); // auto-highlight 3 safest
 };
 document.getElementById("picksBtn").onclick=()=>showPicks();
 document.getElementById("wipe").onclick=()=>{ rows.value=3; cols.value=8; totalJ.value=4; document.getElementById("apply").click(); };
 document.getElementById("hintType").onchange=renderHintParams;
 document.getElementById("addHint").onclick=addHintUI;
 
-/* ===== Tool buttons (incl. Eyedropper) ===== */
+/* ===== Tools (incl. Eyedropper) ===== */
 const toolButtons = {
   toolPick: "PICK",
-  toolDot: "UNKNOWN",
-  toolMoney: "MONEY",
-  toolJerry: "JERRY",
-  toolHint: "HINT",
-  toolReac: "REACTIVATOR",
-  toolEye: "EYE",
-  toolMult: "MULTIPLIER",
-  toolBlank: "BLANK",
+  toolDot: CARD.UNKNOWN,
+  toolMoney: CARD.MONEY,
+  toolJerry: CARD.JERRY,
+  toolHint: CARD.HINT,
+  toolReac: CARD.REACTIVATOR,
+  toolEye: CARD.EYE,
+  toolMult: CARD.MULTIPLIER,
+  toolBlank: CARD.BLANK,
 };
-function typeFromCell(t){ return t; }
 function setTool(type){
-  // force "Place Selected" mode
+  // Set active tool (don't force the <select> to "PICK")
+  activeTool = type;
+  // Switch to "Place Selected" for painting workflows
   document.getElementById("mode").value = "place";
-  document.getElementById("placeType").value = type;
-  // visual active state
+  // If the tool is a real type, sync the <select> for clarity
+  if(type!=="PICK"){ document.getElementById("placeType").value = type; }
+  // Visual active state
   for (const id of Object.keys(toolButtons)){
     const el = document.getElementById(id);
     el.classList.toggle("active", toolButtons[id] === type);
@@ -422,10 +418,9 @@ for (const [id, type] of Object.entries(toolButtons)){
   document.getElementById(id).onclick = ()=> setTool(type);
 }
 
-/* init */
-function renderHintParams(){ /* already defined above; re-run to mount initial fields */ }
+/* ===== Init ===== */
 makeG(); render(); renderHintParams();
-setTool("UNKNOWN");
+setTool(CARD.UNKNOWN);
 </script>
 </body>
 </html>
